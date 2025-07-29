@@ -2,7 +2,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >
   Creates 2 public and 4 private subnets in ap-northeast-2 (Seoul),
   with a public NLB(Cross zone X, IP Preserve O) forwarding to a private ALB(WAF) and two EC2(bespin dwva ami-059fe19ee57e53ff4 / SSM) in private subnets. 
-#### # # # # # 1121
+#### # # # # # 112111
 
 Parameters:
 
