@@ -1,0 +1,558 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Creates 2 public and 4 private subnets in ap-northeast-2 (Seoul),
+  with a public NLB(Cross zone X, IP Preserve O) forwarding to a private ALB(WAF) and two EC2(bespin dwva ami-059fe19ee57e53ff4 / SSM) in private subnets. 
+
+Parameters:
+
+  UserName:
+    Type: String
+    Description: Name of the IAM User to be created
+    Default: mss-lsw
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+  PublicSubnetACIDR:
+    Type: String
+    Default: 10.0.0.0/24
+  PublicSubnetCCIDR:
+    Type: String
+    Default: 10.0.1.0/24
+  PrivateSubnetA1CIDR:
+    Type: String
+    Default: 10.0.2.0/24
+  PrivateSubnetC1CIDR:
+    Type: String
+    Default: 10.0.3.0/24
+  PrivateSubnetA2CIDR:
+    Type: String
+    Default: 10.0.4.0/24
+  PrivateSubnetC2CIDR:
+    Type: String
+    Default: 10.0.5.0/24
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Register for a pre-prepared 'EC2 key pair'.  
+    Default: mss-lsw-apne2
+
+Resources:
+
+  ##IAM
+  MyIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "MSS-WAFtest-Role-${UserName}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  MyInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref MyIAMRole
+      InstanceProfileName: !Sub "MSS-WAFtest-profile-${UserName}"
+
+  # VPC 
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "Private-RouteTable-${UserName}"
+
+  PrivateRoute:
+    Type: AWS::EC2::Route
+    DependsOn: NATGateway
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+  PrivateRouteTableAssociationA1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetA1
+
+  PrivateRouteTableAssociationC1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetC1
+
+  PrivateRouteTableAssociationA2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetA2
+
+  PrivateRouteTableAssociationC2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PrivateRouteTable
+      SubnetId: !Ref PrivateSubnetC2
+
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "MSS-WAFtest-VPC-${UserName}"
+
+  IGW:
+    Type: AWS::EC2::InternetGateway
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref IGW
+
+  PublicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetACIDR
+      AvailabilityZone: ap-northeast-2a
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "Public-AZ-a-${UserName}"
+
+  PublicSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PublicSubnetCCIDR
+      AvailabilityZone: ap-northeast-2c
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "Public-AZ-c-${UserName}"
+
+  PrivateSubnetA1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetA1CIDR
+      AvailabilityZone: ap-northeast-2a
+      Tags:
+        - Key: Name
+          Value: !Sub "Private-AZ-a1-${UserName}"
+
+  PrivateSubnetC1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetC1CIDR
+      AvailabilityZone: ap-northeast-2c
+      Tags:
+        - Key: Name
+          Value: !Sub "Private-AZ-c1-${UserName}"
+
+  PrivateSubnetA2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetA2CIDR
+      AvailabilityZone: ap-northeast-2a
+      Tags:
+        - Key: Name
+          Value: !Sub "Private-AZ-a2-${UserName}"
+
+  PrivateSubnetC2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: !Ref PrivateSubnetC2CIDR
+      AvailabilityZone: ap-northeast-2c
+      Tags:
+        - Key: Name
+          Value: !Sub "Private-AZ-c2-${UserName}"
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGW
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref IGW
+
+  PublicRouteTableAssociationA:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetA
+
+  PublicRouteTableAssociationC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnetC
+
+
+  #EC2
+  NATElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: AttachIGW
+    Properties:
+      Domain: vpc
+
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt NATElasticIP.AllocationId
+      SubnetId: !Ref PublicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub "MSS-WAFtest-NAT-${UserName}"
+
+
+  NLB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      IpAddressType: ipv4
+      LoadBalancerAttributes:
+        - Key: load_balancing.cross_zone.enabled
+          Value: false
+      Name: !Sub "MSS-WAFtest-ExtNLB-${UserName}"
+      Scheme: internet-facing
+      Type: network
+      Subnets:
+        - !Ref PublicSubnetA
+        - !Ref PublicSubnetC
+      SecurityGroups:
+        - !Ref NLBSecurityGroup
+
+  NLBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for NLB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref NLBSecurityGroup
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for EC2
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # For web traffic from ALB
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        # For SSH access - WARNING: Exposing SSH to all IPs (0.0.0.0/0) is a major security risk.
+        # It is highly recommended to replace 0.0.0.0/0 with your specific IP address.
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "MSS-WAFtest-IntNLB-${UserName}"
+      Scheme: internal
+      Subnets:
+        - !Ref PrivateSubnetA1
+        - !Ref PrivateSubnetC1
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckPath: /login.php
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      TargetType: instance
+      Targets:
+        - Id: !Ref EC2InstanceA
+        - Id: !Ref EC2InstanceC
+
+  NLBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    DependsOn: ALBListener
+    Properties:
+      Port: 80
+      Protocol: TCP
+      VpcId: !Ref VPC
+      TargetType: alb
+      Targets:
+        - Id: !Ref ALB
+
+  NLBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref NLBTargetGroup
+      LoadBalancerArn: !Ref NLB
+      Port: 80
+      Protocol: TCP
+
+  EC2InstanceA:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - MyInstanceProfile
+    Properties:
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            sudo snap refresh
+            sudo apt install php-curl
+            cat << 'EOF' > /etc/update-motd.d/99-custom
+            #!/bin/bash
+            echo "🚨 Welcome to the DVWA server 🚨"
+            echo "bespinglobal.MSS "
+            echo "Hostname  : $(hostname)"
+            echo "User      : $(whoami)"
+            echo "Date/Time : UTC+0: $(date '+%Y-%m-%d %H:%M:%S')"
+            EOF
+            chmod +x /etc/update-motd.d/99-custom
+            if ! grep -Fxq "sudo run-parts /etc/update-motd.d/ | cat" /etc/bash.bashrc; then
+              echo "sudo run-parts /etc/update-motd.d/ | cat" >> /etc/bash.bashrc
+            fi
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnetA2
+      ImageId: ami-059fe19ee57e53ff4  # 베스핀 mss팀용 dvwa ami 
+      IamInstanceProfile: !Ref MyInstanceProfile
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "MSS-WAFtest-PrivateEC2-apne-2a-${UserName}"
+
+  EC2InstanceC:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - MyInstanceProfile
+    Properties:
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            sudo snap refresh
+            sudo apt install php-curl
+            cat << 'EOF' > /etc/update-motd.d/99-custom
+            #!/bin/bash
+            echo "🚨 Welcome to the DVWA server 🚨"
+            echo "bespinglobal.MSS "
+            echo "Hostname  : $(hostname)"
+            echo "User      : $(whoami)"
+            echo "Date/Time : UTC+0: $(date '+%Y-%m-%d %H:%M:%S')"
+            EOF
+            chmod +x /etc/update-motd.d/99-custom
+            if ! grep -Fxq "sudo run-parts /etc/update-motd.d/ | cat" /etc/bash.bashrc; then
+              echo "sudo run-parts /etc/update-motd.d/ | cat" >> /etc/bash.bashrc
+            fi
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref PrivateSubnetC2
+      ImageId: ami-059fe19ee57e53ff4  # 베스핀 mss팀용 dvwa ami
+      IamInstanceProfile: !Ref MyInstanceProfile
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "MSS-WAFtest-PrivateEC2-apne-2c-${UserName}"
+
+  WAFALBAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    DependsOn:
+      - ALB
+      - WAFWebACL
+    Properties:
+      ResourceArn: 
+        Fn::GetAtt:
+          - ALB
+          - LoadBalancerArn
+      WebACLArn:
+        Fn::GetAtt:
+          - WAFWebACL
+          - Arn
+
+  WAFLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "aws-waf-logs-${UserName}"
+      RetentionInDays: 7 
+      Tags:
+        - Key: Name
+          Value: !Sub "aws-waf-logs-${UserName}"
+
+  WAFLoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    DependsOn:
+      - WAFWebACL
+    Properties:
+      LogDestinationConfigs:
+        - !GetAtt WAFLogGroup.Arn
+      ResourceArn: !GetAtt WAFWebACL.Arn
+  
+
+  WAFWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Sub "MSS-WAFtest-WebACL-${UserName}"
+      Description: "WebACL for ALB"
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "MSS-WAFtest-metric-${UserName}"
+      Rules:
+## Custom Rule
+        - Name: KR-except-block
+          Priority: 1
+          Statement:
+            NotStatement:
+              Statement:
+                GeoMatchStatement:
+                  CountryCodes:
+                    - KR
+          Action:
+            Count: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KR-except-block
+
+        - Name: Ratebased-100
+          Priority: 2
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+              EvaluationWindow: 300
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: test1
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 3
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSet
+        - Name: AWSManagedRulesSQLiRuleSet
+          Priority: 4
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: SQLiRuleSet
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 5
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KnownBadInputsRuleSet
+        - Name: AWSManagedRulesAdminProtectionRuleSet
+          Priority: 6
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAdminProtectionRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AdminProtectionRuleSet
+## custom2
+        - Name: SpringCloudGateway_actuator
+          Priority: 7
+          Statement:
+            RegexMatchStatement:
+              RegexString: "^\\/actuator(\\/.*)?$"    # escape  -> \\
+              FieldToMatch:
+                UriPath: {}
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: SpringCloudGateway_actuator
+
+Outputs:
+  NLBEndpoint:
+    Description: NLB DNS name
+    Value: !GetAtt NLB.DNSName

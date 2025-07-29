@@ -1,0 +1,416 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS WAF create some resources (AWS WAF, DVWA EC2, ALB, )
+
+Parameters:
+  KeyName:
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: mss-lsw-apne2
+    ConstraintDescription: must be the name of an existing EC2 KeyPair.
+
+  WebACLName:
+    Type: String
+    Description: Name of the WAF WebACL
+    Default: mss-waf-WebACLName
+
+  AWSRegion:
+    Type: String
+    Description: AWS region for deployment (e.g., ap-northeast-2)
+    Default: ap-northeast-2
+
+  UserName:
+    Type: String
+    Description: Name of the IAM User to be created
+    Default: mss-lsw
+
+  SSHLocation:
+    Description: The IP address range that can be used to SSH to the EC2 instances
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 0.0.0.0/0
+    AllowedPattern: (\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})
+    ConstraintDescription: must be a valid IP CIDR range of the form x.x.x.x/x.
+
+  S3BucketName:
+    Type: String
+    Description: Name for the S3 bucket (must be globally unique)
+    Default: aws-waf-logs-mssteam-test
+  
+Resources:
+
+##IAM 
+  MyIAMRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "MSS-WAFtest-Role-${UserName}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+  
+  MyInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref MyIAMRole
+      InstanceProfileName: !Sub "MSS-WAFtest-profile-${UserName}"
+
+## VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.100.0.0/16
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      Tags:
+      - Key: Name
+        Value: !Sub "MSS-WAFtest-vpc-${UserName}"
+  SubnetAZ1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPC
+      CidrBlock: 10.100.0.0/24
+      AvailabilityZone:
+        Fn::Select:
+        - '0'
+        - Fn::GetAZs: ''
+      Tags:
+      - Key: Name
+        Value: !Sub "MSS-WAFtest-sbn-az1-${UserName}"
+  SubnetAZ2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId:
+        Ref: VPC
+      CidrBlock: 10.100.2.0/24
+      AvailabilityZone:
+        Fn::Select:
+        - '1'
+        - Fn::GetAZs: ''
+      Tags:
+      - Key: Name
+        Value: !Sub "MSS-WAFtest-sbn-az2-${UserName}"
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+      - Key: Name
+        Value: !Sub "MSS-WAFtest-sbn-${UserName}"
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId:
+        Ref: VPC
+      InternetGatewayId:
+        Ref: InternetGateway
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId:
+        Ref: VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "MSS-WAFtest-rtb-${UserName}"
+
+  Route:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId:
+        Ref: RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId:
+        Ref: InternetGateway
+
+  SubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: SubnetAZ1
+      RouteTableId:
+        Ref: RouteTable
+
+  SubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId:
+        Ref: SubnetAZ2
+      RouteTableId:
+        Ref: RouteTable
+
+  ## EC2   
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      VpcId:
+        Ref: VPC
+      GroupDescription: Enable SSH/HTTP
+      Tags:
+      - Key: Name
+        Value: !Sub "MSS-WAFtest-sg-${UserName}"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp:
+          Ref: SSHLocation
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Subnets:
+      - Ref: SubnetAZ1
+      - Ref: SubnetAZ2
+      SecurityGroups:
+      - Ref: InstanceSecurityGroup
+      Tags:
+      - Key: Name
+        Value: !Sub "MSS-WAFtest-alb-${UserName}"
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: ALBTargetGroup
+      LoadBalancerArn:
+        Ref: ApplicationLoadBalancer
+      Port: '80'
+      Protocol: HTTP
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 3
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 5
+      VpcId:
+        Ref: VPC
+      Tags:
+      - Key: Name
+        Value: !Sub "MSS-WAFtest-tg-${UserName}"
+      Targets:
+      - Id:
+          Ref: WebServerInstance
+        Port: 80
+      TargetGroupAttributes:
+      - Key: stickiness.enabled
+        Value: 'true'
+      - Key: stickiness.type
+        Value: lb_cookie
+      - Key: stickiness.lb_cookie.duration_seconds
+        Value: '180'
+
+  WebServerInstance:
+    Type: AWS::EC2::Instance
+    DependsOn:
+      - MyInstanceProfile
+    Properties:
+      InstanceType: t3.micro
+      ImageId: ami-01b64452e03b5431c  # aws dvwa amz2
+      IamInstanceProfile: !Ref MyInstanceProfile
+      KeyName: !Ref KeyName
+      Tags:
+        - Key: Name
+          Value: !Sub DVWA-test-ec2-accountID:admin/password--${UserName}
+      
+      NetworkInterfaces:
+        - DeviceIndex: 0
+          SubnetId: !Ref SubnetAZ1
+          GroupSet:
+          - !Ref InstanceSecurityGroup
+          AssociatePublicIpAddress: true
+          PrivateIpAddress: 10.100.0.6
+      
+      UserData:
+        Fn::Base64:
+          !Sub |       
+          #!/bin/bash
+          # Snap 최신화
+          sudo snap refresh
+          # 배너 스크립트 생성
+          cat << 'EOF' > /etc/update-motd.d/99-custom
+          #!/bin/bash
+          echo "🚨 Welcome to the DVWA server 🚨"
+          echo "bespinglobal.MSS "
+          echo "Hostname  : $(hostname)"
+          echo "User      : $(whoami)"
+          echo "Date/Time : UTC+0: $(date '+%Y-%m-%d %H:%M:%S')"
+          EOF
+
+          # 실행 권한 부여
+          chmod +x /etc/update-motd.d/99-custom
+
+          # /etc/bash.bashrc 맨 아래에 motd 출력 명령어 삽입 (중복 방지 포함)
+          if ! grep -Fxq "sudo run-parts /etc/update-motd.d/ | cat" /etc/bash.bashrc; then
+              echo "sudo run-parts /etc/update-motd.d/ | cat" >> /etc/bash.bashrc
+          fi
+
+ ### WAF WebACL ###
+  WAFALBAssociation:
+    Type: AWS::WAFv2::WebACLAssociation
+    DependsOn:
+      - ApplicationLoadBalancer
+      - WAFWebACL
+    Properties:
+      ResourceArn: 
+        Fn::GetAtt:
+          - ApplicationLoadBalancer
+          - LoadBalancerArn
+      WebACLArn:
+        Fn::GetAtt:
+          - WAFWebACL
+          - Arn
+
+  WAFWebACL:
+    Type: AWS::WAFv2::WebACL
+    Properties:
+      Name: !Ref WebACLName
+      Scope: REGIONAL
+      DefaultAction:
+        Allow: {}
+      VisibilityConfig:
+        SampledRequestsEnabled: true
+        CloudWatchMetricsEnabled: true
+        MetricName: !Sub "${WebACLName}-metric"
+      Rules:
+
+## Custom 
+        - Name: KR-except-block
+          Priority: 1
+          Statement:
+            NotStatement:
+              Statement:
+                GeoMatchStatement:
+                  CountryCodes:
+                    - KR
+          Action:
+            Count: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KR-except-block
+
+        - Name: Ratebased-100
+          Priority: 2
+          Statement:
+            RateBasedStatement:
+              Limit: 100
+              AggregateKeyType: IP
+              EvaluationWindow: 300
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: test1
+        - Name: AWSManagedRulesCommonRuleSet
+          Priority: 3
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesCommonRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: CommonRuleSet
+        - Name: AWSManagedRulesSQLiRuleSet
+          Priority: 4
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesSQLiRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: SQLiRuleSet
+        - Name: AWSManagedRulesKnownBadInputsRuleSet
+          Priority: 5
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesKnownBadInputsRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: KnownBadInputsRuleSet
+        - Name: AWSManagedRulesAdminProtectionRuleSet
+          Priority: 6
+          OverrideAction: {None: {}}
+          Statement:
+            ManagedRuleGroupStatement:
+              VendorName: AWS
+              Name: AWSManagedRulesAdminProtectionRuleSet
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: AdminProtectionRuleSet
+
+## custom2
+        - Name: SpringCloudGateway_actuator
+          Priority: 7
+          Statement:
+            RegexMatchStatement:
+              RegexString: "^\\/actuator(\\/.*)?$"    # escape  -> \\
+              FieldToMatch:
+                UriPath: {}
+              TextTransformations:
+                - Priority: 0
+                  Type: NONE
+          Action:
+            Block: {}
+          VisibilityConfig:
+            SampledRequestsEnabled: true
+            CloudWatchMetricsEnabled: true
+            MetricName: SpringCloudGateway_actuator
+
+      
+###  WAF Logging Configuration ###
+  WAFLoggingConfiguration:
+    Type: AWS::WAFv2::LoggingConfiguration
+    DependsOn:
+      - WAFWebACL
+    Properties:
+      ResourceArn: !GetAtt WAFWebACL.Arn
+      LogDestinationConfigs:
+        - !Sub arn:aws:s3:::${S3BucketName}
+  
+Outputs:
+  InstanceId:
+    Value:
+      Ref: WebServerInstance
+    Description: Instance Id of newly created instance
+    
+  AlbEndpoint:
+    Value:
+      Fn::GetAtt:
+      - ApplicationLoadBalancer
+      - DNSName
+    Description: Application Load Balancer Endpoint
+
+  WAFWebACLArn:
+    Description: ARN of the WAF Web ACL
+    Value:
+      Fn::GetAtt:
+      - WAFWebACL
+      - Arn
