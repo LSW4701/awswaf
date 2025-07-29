@@ -452,7 +452,7 @@ Resources:
   WAFWebACL:
     Type: AWS::WAFv2::WebACL
     Properties:
-      Name: !Sub "MSS-WAFtest-WebACL-${UserName}"
+      Name: !Sub "MSS1-WAFtest-WebACL-${UserName}"
       Description: "WebACL for ALB"
       Scope: REGIONAL
       DefaultAction:
