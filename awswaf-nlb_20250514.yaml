@@ -450,9 +450,9 @@ Resources:
   
 
   WAFWebACL:
-    Type: AWS::WAFv2::WebACL
+    Type: AWS::WAFv2::WebACL  
     Properties:
-      Name: !Sub "MSS1-WAFtest-WebACL-${UserName}"
+      Name: !Sub "MSS-WAFtest-WebACL-${UserName}"
       Description: "WebACL for ALB"
       Scope: REGIONAL
       DefaultAction:
@@ -462,6 +462,7 @@ Resources:
         CloudWatchMetricsEnabled: true
         MetricName: !Sub "MSS-WAFtest-metric-${UserName}"
       Rules:
+      
 ## Custom Rule
         - Name: KR-except-block
           Priority: 1
