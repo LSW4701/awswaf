@@ -291,7 +291,6 @@ Resources:
         CloudWatchMetricsEnabled: true
         MetricName: !Sub "${WebACLName}-metric"
       Rules:
-
 ## Custom 
         - Name: KR-except-block
           Priority: 1
@@ -365,7 +364,6 @@ Resources:
             SampledRequestsEnabled: true
             CloudWatchMetricsEnabled: true
             MetricName: AdminProtectionRuleSet
-
 ## custom2
         - Name: SpringCloudGateway_actuator
           Priority: 7
